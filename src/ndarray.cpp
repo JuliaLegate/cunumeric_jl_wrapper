@@ -147,9 +147,10 @@ CN_NDArray* nda_reshape_array(CN_NDArray* arr, int32_t dim,
   return new CN_NDArray{NDArray(std::move(result))};
 }
 
-CN_NDArray* nda_from_scalar(const legate::Scalar& scalar){
+CN_NDArray* nda_from_scalar(const void* value, CN_Type type){
+    Scalar s(type.obj, value, true);
     auto runtime = legate::Runtime::get_runtime();
-    auto scalar_store  = runtime->create_scalar_store(scalar);
+    auto scalar_store  = runtime->create_scalar_store(s);
     return new CN_NDArray{NDArray(std::move(scalar_store))};
 }
 
