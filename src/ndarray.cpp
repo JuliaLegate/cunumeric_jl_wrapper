@@ -148,7 +148,7 @@ CN_NDArray* nda_reshape_array(CN_NDArray* arr, int32_t dim,
 }
 
 CN_NDArray* nda_from_scalar(const legate::Scalar& scalar){
-    auto runtime = cupynumeric::CuPyNumericRuntime::get_runtime();
+    auto runtime = legate::Runtime::get_runtime();
     auto scalar_store  = runtime->create_scalar_store(scalar);
     return new CN_NDArray{NDArray(std::move(scalar_store))};
 }
