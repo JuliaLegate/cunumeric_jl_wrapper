@@ -147,6 +147,12 @@ CN_NDArray* nda_reshape_array(CN_NDArray* arr, int32_t dim,
   return new CN_NDArray{NDArray(std::move(result))};
 }
 
+CN_NDArray* nda_from_scalar(const legate::Scalar& scalar){
+    auto runtime = cupynumeric::CuPyNumericRuntime::get_runtime();
+    auto scalar_store  = runtime->create_scalar_store(scalar);
+    return new CN_NDArray{NDArray(std::move(scalar_store))};
+}
+
 CN_NDArray* nda_astype(CN_NDArray* arr, CN_Type type) {
   NDArray result = arr->obj.as_type(type.obj);
   return new CN_NDArray{NDArray(std::move(result))};
