@@ -31,7 +31,7 @@ struct CN_NDArray {
   cupynumeric::NDArray obj;
 };
 
-// #define CUDA_DEBUG 1
+#define CUDA_DEBUG 1
 
 #define BLOCK_START 1
 #define THREAD_START 4
@@ -123,8 +123,9 @@ enum class AccessMode {
   struct CuDeviceArray {
     void *ptr;
     int64_t maxsize;
+    int64_t dim1;
+    int64_t dim2;
     int64_t length;
-    int64_t reserved;
   };
 
 
@@ -142,10 +143,11 @@ enum class AccessMode {
     void *dev_ptr = const_cast<void *>(/*.lo to ensure multiple GPU support*/  \
                                        static_cast<const void *>(              \
                                            acc.ptr(Realm::Point<D>(shp.lo)))); \
+    auto extents = shp.hi - shp.lo + legate::Point<D>::ONES();   \
                                                                                \
     CuDeviceArray desc = {                                                     \
         dev_ptr, static_cast<int64_t>(shp.volume()) * (int64_t)sizeof(T),      \
-        static_cast<int64_t>(shp.volume()), 0};                                \
+             extents[0], extents[1], shp.volume()};                            \
     memcpy(p, &desc, sizeof(CuDeviceArray));                                   \
     p += sizeof(CuDeviceArray);                                                \
   }
