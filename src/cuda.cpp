@@ -31,11 +31,14 @@ struct CN_NDArray {
   cupynumeric::NDArray obj;
 };
 
-// #define CUDA_DEBUG 1
+#define CUDA_DEBUG 1
 
 #define BLOCK_START 1
 #define THREAD_START 4
 #define ARG_OFFSET 7
+
+// global padding for CUDA.jl kernel state
+std::size_t padded_bytes_kernel_state = 16;
 
 #define ERROR_CHECK(x)                                                 \
   {                                                                    \
@@ -108,17 +111,23 @@ std::string key_to_string(const FunctionKey &key) {
 }
 #endif
 
-struct CuDeviceArray {
-  void *ptr;
-  int64_t maxsize;
-  int64_t length;
-  int64_t reserved;
-};
+// struct CuDeviceArray {
+//   void *ptr;
+// };
 
 enum class AccessMode {
   READ,
   WRITE,
 };
+
+  struct CuDeviceArray {
+    void *ptr;
+    int64_t maxsize;
+    int64_t dim1;
+    int64_t dim2;
+    int64_t length;
+  };
+
 
 /* TODO::  check if std::enable_if is reducing the template expansion */
 #define CUDA_DEVICE_ARRAY_ARG(MODE, ACCESSOR_CALL)                             \
@@ -129,14 +138,16 @@ enum class AccessMode {
                                     const legate::PhysicalArray &rf) {         \
     auto shp = rf.shape<D>();                                                  \
     auto acc = rf.data().ACCESSOR_CALL<T, D>();                                \
+    std::cerr << "[RunPTXTask] " #MODE " accessor shape: " << shp.lo << " - " << shp.hi << ", dim: " << D << std::endl; \
+    std::cerr << "[RunPTXTask] " #MODE " accessor strides: " << acc.accessor.strides << std::endl; \
     void *dev_ptr = const_cast<void *>(/*.lo to ensure multiple GPU support*/  \
                                        static_cast<const void *>(              \
                                            acc.ptr(Realm::Point<D>(shp.lo)))); \
+    auto extents = shp.hi - shp.lo + legate::Point<D>::ONES();   \
                                                                                \
     CuDeviceArray desc = {                                                     \
         dev_ptr, static_cast<int64_t>(shp.volume()) * (int64_t)sizeof(T),      \
-        static_cast<int64_t>(shp.volume()), 0};                                \
-                                                                               \
+             extents[0], extents[1], shp.volume()};                            \
     memcpy(p, &desc, sizeof(CuDeviceArray));                                   \
     p += sizeof(CuDeviceArray);                                                \
   }
@@ -243,27 +254,33 @@ void dispatch_type(AccessMode mode, legate::Type::Code code, int dim, char *&p,
   const std::size_t num_reductions =
       context.num_reductions();  // unused for now
 
-  const std::size_t padded_bytes = 16;
-
   // compute total size: all device arrays + all scalars
   // skip scalar 0-2 (kernel_name, threads, blocks)
-  std::size_t buffer_size =
-      padded_bytes + (num_inputs + num_outputs) * sizeof(CuDeviceArray);
+  std::size_t buffer_size = padded_bytes_kernel_state +
+                            (num_inputs + num_outputs) * sizeof(CuDeviceArray);
   for (std::size_t i = ARG_OFFSET; i < num_scalars; ++i)
     buffer_size += context.scalar(i).size();
 
   std::vector<char> arg_buffer(buffer_size);
-  char *p = arg_buffer.data() + padded_bytes;
+  char *p = arg_buffer.data() + padded_bytes_kernel_state;
   for (std::size_t i = 0; i < num_inputs; ++i) {
     auto ps = context.input(i);
     auto code = ps.type().code();
     auto dim = ps.dim();
+    #ifdef CUDA_DEBUG
+    std::cerr << "[RunPTXTask] Input " << i << " type: " << code
+              << ", dim: " << dim << std::endl;
+    #endif  
     dispatch_type(ufi::AccessMode::READ, code, dim, p, ps);
   }
   for (std::size_t i = 0; i < num_outputs; ++i) {
     auto ps = context.output(i);
     auto code = ps.type().code();
     auto dim = ps.dim();
+    #ifdef CUDA_DEBUG
+        std::cerr << "[RunPTXTask] Output " << i << " type: " << code
+              << ", dim: " << dim << std::endl;
+    #endif  
     dispatch_type(ufi::AccessMode::WRITE, code, dim, p, ps);
   }
   for (std::size_t i = ARG_OFFSET; i < num_scalars; ++i) {
@@ -281,7 +298,14 @@ void dispatch_type(AccessMode mode, legate::Type::Code code, int dim, char *&p,
   };
 
   CUstream custream_ = reinterpret_cast<CUstream>(stream_);
-
+  
+#ifdef CUDA_DEBUG
+  std::cerr << "[RunPTXTask] Launching kernel " << kernel_name
+            << " with block (" << bx << "," << by << "," << bz
+            << ") and thread (" << tx << "," << ty << "," << tz << ")"
+            << " on CUcontext " << context_to_string(ctx) << std::endl;
+#endif
+  // Launch the kernel
   DRIVER_ERROR_CHECK(cuLaunchKernel(func, tx, ty, tz, bx, by, bz, 0, custream_,
                                     nullptr, config));
 
@@ -511,8 +535,14 @@ std::string extract_kernel_name(std::string ptx) {
   return fun_name;
 }
 
+void register_kernel_state_size(uint64_t st_size) {
+  // update global
+  padded_bytes_kernel_state = st_size;
+}
+
 void wrap_cuda_methods(jlcxx::Module &mod) {
   mod.method("register_tasks", &register_tasks);
+  mod.method("register_kernel_state_size", &register_kernel_state_size);
   mod.method("get_library", &get_lib);
   mod.method("new_task", &new_task);
   mod.method("ptx_task", &ptx_task);
