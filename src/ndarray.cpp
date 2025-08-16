@@ -10,6 +10,7 @@
 
 #include "cupynumeric.h"
 #include "cupynumeric/operators.h"
+#include "cupynumeric/runtime.h"
 #include "legate.h"
 #include "ndarray_c_api.h"
 
@@ -145,6 +146,14 @@ CN_NDArray* nda_reshape_array(CN_NDArray* arr, int32_t dim,
   std::vector<int64_t> shp(shape, shape + dim);
   NDArray result = cupynumeric::reshape(arr->obj, shp, "C");
   return new CN_NDArray{NDArray(std::move(result))};
+}
+
+CN_NDArray* nda_from_scalar(CN_Type type, const void* value){
+    Scalar s(type.obj, value, true);
+    auto runtime = cupynumeric::CuPyNumericRuntime::get_runtime();
+    auto scalar_store  = runtime->create_scalar_store(s);
+    return new CN_NDArray{cupynumeric::as_array(scalar_store)};
+    // return new CN_NDArray{NDArray(std::move(scalar_store))};
 }
 
 CN_NDArray* nda_astype(CN_NDArray* arr, CN_Type type) {
