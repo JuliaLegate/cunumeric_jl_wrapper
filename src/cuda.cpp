@@ -18,9 +18,7 @@
  */
 
 #include "cuda.h"
-
 #include <regex>
-
 #include "cupynumeric.h"
 #include "legate.h"
 #include "legate/utilities/proc_local_storage.h"
@@ -111,22 +109,18 @@ std::string key_to_string(const FunctionKey &key) {
 }
 #endif
 
-// struct CuDeviceArray {
-//   void *ptr;
-// };
-
 enum class AccessMode {
   READ,
   WRITE,
 };
 
-  struct CuDeviceArray {
-    void *ptr;
-    int64_t maxsize;
-    int64_t dim1;
-    int64_t dim2;
-    int64_t length;
-  };
+template <size_t D>
+struct CuDeviceArray {
+    void* ptr;                    // Pointer to device memory
+    size_t maxsize;               // Total allocated size in bytes
+    std::array<size_t, D> dims;   // Fixed-size array of dimension sizes
+    size_t length;                // Number of elements (at the end)
+};
 
 
 /* TODO::  check if std::enable_if is reducing the template expansion */
@@ -138,18 +132,23 @@ enum class AccessMode {
                                     const legate::PhysicalArray &rf) {         \
     auto shp = rf.shape<D>();                                                  \
     auto acc = rf.data().ACCESSOR_CALL<T, D>();                                \
-    std::cerr << "[RunPTXTask] " #MODE " accessor shape: " << shp.lo << " - " << shp.hi << ", dim: " << D << std::endl; \
-    std::cerr << "[RunPTXTask] " #MODE " accessor strides: " << acc.accessor.strides << std::endl; \
+    std::cerr << "[RunPTXTask] " #MODE " accessor shape: " << shp.lo << " - "  \
+              << shp.hi << ", dim: " << D << std::endl;                        \
+    std::cerr << "[RunPTXTask] " #MODE " accessor strides: "                   \
+              << acc.accessor.strides << std::endl;                            \
     void *dev_ptr = const_cast<void *>(/*.lo to ensure multiple GPU support*/  \
                                        static_cast<const void *>(              \
                                            acc.ptr(Realm::Point<D>(shp.lo)))); \
-    auto extents = shp.hi - shp.lo + legate::Point<D>::ONES();   \
-                                                                               \
-    CuDeviceArray desc = {                                                     \
-        dev_ptr, static_cast<int64_t>(shp.volume()) * (int64_t)sizeof(T),      \
-             extents[0], extents[1], shp.volume()};                            \
-    memcpy(p, &desc, sizeof(CuDeviceArray));                                   \
-    p += sizeof(CuDeviceArray);                                                \
+    auto extents = shp.hi - shp.lo + legate::Point<D>::ONES();                 \
+    CuDeviceArray<D> desc;                                                     \
+    desc.ptr = dev_ptr;                                                        \
+    desc.maxsize = shp.volume() * sizeof(T);                                   \
+    for (size_t i = 0; i < D; ++i) {                                           \
+      desc.dims[i] = extents[i];                                               \
+    }                                                                          \
+    desc.length = shp.volume();                                                \
+    memcpy(p, &desc, sizeof(CuDeviceArray<D>));                                \
+    p += sizeof(CuDeviceArray<D>);                                             \
   }
 
 CUDA_DEVICE_ARRAY_ARG(read, read_accessor);    // cuda_device_array_arg_read
@@ -256,13 +255,15 @@ void dispatch_type(AccessMode mode, legate::Type::Code code, int dim, char *&p,
 
   // compute total size: all device arrays + all scalars
   // skip scalar 0-2 (kernel_name, threads, blocks)
-  std::size_t buffer_size = padded_bytes_kernel_state +
-                            (num_inputs + num_outputs) * sizeof(CuDeviceArray);
+  // we allocate extra to decrease looping and dynamic dispatching on dim
+  std::size_t max_buffer_size = padded_bytes_kernel_state +
+        (num_inputs + num_outputs) * sizeof(CuDeviceArray<REALM_MAX_DIM>);
   for (std::size_t i = ARG_OFFSET; i < num_scalars; ++i)
-    buffer_size += context.scalar(i).size();
+    max_buffer_size += context.scalar(i).size();
 
-  std::vector<char> arg_buffer(buffer_size);
+  std::vector<char> arg_buffer(max_buffer_size);
   char *p = arg_buffer.data() + padded_bytes_kernel_state;
+  
   for (std::size_t i = 0; i < num_inputs; ++i) {
     auto ps = context.input(i);
     auto code = ps.type().code();
@@ -288,7 +289,9 @@ void dispatch_type(AccessMode mode, legate::Type::Code code, int dim, char *&p,
     memcpy(p, scalar.ptr(), scalar.size());
     p += scalar.size();
   }
-
+  
+  std::size_t buffer_size = p - arg_buffer.data(); // calc used buffer
+    
   void *config[] = {
       CU_LAUNCH_PARAM_BUFFER_POINTER,
       static_cast<void *>(arg_buffer.data()),
