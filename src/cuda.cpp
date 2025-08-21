@@ -18,7 +18,10 @@
  */
 
 #include "cuda.h"
+
+#include <cstdint>
 #include <regex>
+
 #include "cupynumeric.h"
 #include "legate.h"
 #include "legate/utilities/proc_local_storage.h"
@@ -116,12 +119,11 @@ enum class AccessMode {
 
 template <size_t D>
 struct CuDeviceArray {
-    void* ptr;                    // Pointer to device memory
-    size_t maxsize;               // Total allocated size in bytes
-    std::array<size_t, D> dims;   // Fixed-size array of dimension sizes
-    size_t length;                // Number of elements (at the end)
+  void *ptr;                     // Pointer to device memory
+  uint64_t maxsize;              // Total allocated size in bytes
+  std::array<uint64_t, D> dims;  // Fixed-size array of dimension sizes
+  uint64_t length;               // Number of elements (at the end)
 };
-
 
 /* TODO::  check if std::enable_if is reducing the template expansion */
 #define CUDA_DEVICE_ARRAY_ARG(MODE, ACCESSOR_CALL)                             \
@@ -256,32 +258,33 @@ void dispatch_type(AccessMode mode, legate::Type::Code code, int dim, char *&p,
   // compute total size: all device arrays + all scalars
   // skip scalar 0-2 (kernel_name, threads, blocks)
   // we allocate extra to decrease looping and dynamic dispatching on dim
-  std::size_t max_buffer_size = padded_bytes_kernel_state +
-        (num_inputs + num_outputs) * sizeof(CuDeviceArray<REALM_MAX_DIM>);
+  std::size_t max_buffer_size =
+      padded_bytes_kernel_state +
+      (num_inputs + num_outputs) * sizeof(CuDeviceArray<REALM_MAX_DIM>);
   for (std::size_t i = ARG_OFFSET; i < num_scalars; ++i)
     max_buffer_size += context.scalar(i).size();
 
   std::vector<char> arg_buffer(max_buffer_size);
   char *p = arg_buffer.data() + padded_bytes_kernel_state;
-  
+
   for (std::size_t i = 0; i < num_inputs; ++i) {
     auto ps = context.input(i);
     auto code = ps.type().code();
     auto dim = ps.dim();
-    #ifdef CUDA_DEBUG
+#ifdef CUDA_DEBUG
     std::cerr << "[RunPTXTask] Input " << i << " type: " << code
               << ", dim: " << dim << std::endl;
-    #endif  
+#endif
     dispatch_type(ufi::AccessMode::READ, code, dim, p, ps);
   }
   for (std::size_t i = 0; i < num_outputs; ++i) {
     auto ps = context.output(i);
     auto code = ps.type().code();
     auto dim = ps.dim();
-    #ifdef CUDA_DEBUG
-        std::cerr << "[RunPTXTask] Output " << i << " type: " << code
+#ifdef CUDA_DEBUG
+    std::cerr << "[RunPTXTask] Output " << i << " type: " << code
               << ", dim: " << dim << std::endl;
-    #endif  
+#endif
     dispatch_type(ufi::AccessMode::WRITE, code, dim, p, ps);
   }
   for (std::size_t i = ARG_OFFSET; i < num_scalars; ++i) {
@@ -289,9 +292,9 @@ void dispatch_type(AccessMode mode, legate::Type::Code code, int dim, char *&p,
     memcpy(p, scalar.ptr(), scalar.size());
     p += scalar.size();
   }
-  
-  std::size_t buffer_size = p - arg_buffer.data(); // calc used buffer
-    
+
+  std::size_t buffer_size = p - arg_buffer.data();  // calc used buffer
+
   void *config[] = {
       CU_LAUNCH_PARAM_BUFFER_POINTER,
       static_cast<void *>(arg_buffer.data()),
@@ -301,7 +304,7 @@ void dispatch_type(AccessMode mode, legate::Type::Code code, int dim, char *&p,
   };
 
   CUstream custream_ = reinterpret_cast<CUstream>(stream_);
-  
+
 #ifdef CUDA_DEBUG
   std::cerr << "[RunPTXTask] Launching kernel " << kernel_name
             << " with block (" << bx << "," << by << "," << bz
@@ -443,6 +446,32 @@ inline void add_transitive_alignment(
     task.add_constraint(legate::align(outputs[0], inputs[0]));
 }
 
+// inline void add_transitive_alignment(
+//     legate::AutoTask &task,
+//     const std::vector<legate::Variable> &inputs,
+//     const std::vector<legate::Variable> &outputs,
+//     std::optional<std::pair<legate::tuple<uint64_t>,
+//     legate::tuple<uint64_t>>> bloat = std::nullopt)
+// {
+//   for (size_t i = 1; i < inputs.size(); ++i)
+//     task.add_constraint(legate::align(inputs[i], inputs[0]));
+//   for (size_t i = 1; i < outputs.size(); ++i)
+//     task.add_constraint(legate::align(outputs[i], outputs[0]));
+
+//   if (!inputs.empty() && !outputs.empty()) {
+//     if (bloat.has_value()) {
+//       // apply bloating alignment: outputs relative to inputs
+//       auto [low, high] = bloat.value();
+//       std::cerr << "[RunPTXTask] BLOAT ALLIGNMENT low: " << low
+//                 << " :: high: " << high << std::endl;
+//       task.add_constraint(legate::bloat(outputs[0], inputs[0], low, high));
+//     } else {
+//       // normal strict alignment
+//       task.add_constraint(legate::align(outputs[0], inputs[0]));
+//     }
+//   }
+// }
+
 legate::Library get_lib() {
   auto runtime = cupynumeric::CuPyNumericRuntime::get_runtime();
   return runtime->get_library();
@@ -500,6 +529,10 @@ void new_task(std::string kernel_name, std::vector<uint32_t> &blocks,
   /* TODO actually support the constraint system */
   // Add alignment constraints
   add_transitive_alignment(task, input_vars, output_vars);
+
+  // add_transitive_alignment(task, input_vars, output_vars,
+  //                          std::make_pair(legate::tuple<uint64_t>{0, 0},
+  //                                         legate::tuple<uint64_t>{2, 2}));
 
   runtime->submit(std::move(task));
 }
