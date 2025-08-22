@@ -32,7 +32,7 @@ struct CN_NDArray {
   cupynumeric::NDArray obj;
 };
 
-#define CUDA_DEBUG 1
+// #define CUDA_DEBUG 1
 
 #define BLOCK_START 1
 #define THREAD_START 4
@@ -307,12 +307,12 @@ void dispatch_type(AccessMode mode, legate::Type::Code code, int dim, char *&p,
 
 #ifdef CUDA_DEBUG
   std::cerr << "[RunPTXTask] Launching kernel " << kernel_name
-            << " with block (" << bx << "," << by << "," << bz
-            << ") and thread (" << tx << "," << ty << "," << tz << ")"
+            << " with blocks (" << bx << "," << by << "," << bz
+            << ") and threads (" << tx << "," << ty << "," << tz << ")"
             << " on CUcontext " << context_to_string(ctx) << std::endl;
 #endif
   // Launch the kernel
-  DRIVER_ERROR_CHECK(cuLaunchKernel(func, tx, ty, tz, bx, by, bz, 0, custream_,
+  DRIVER_ERROR_CHECK(cuLaunchKernel(func, bx, by, bz, tx, ty, tz, 0, custream_,
                                     nullptr, config));
 
   // DRIVER_ERROR_CHECK(cuStreamSynchronize(stream_));
@@ -446,6 +446,7 @@ inline void add_transitive_alignment(
     task.add_constraint(legate::align(outputs[0], inputs[0]));
 }
 
+// bloat allignment for stencils
 // inline void add_transitive_alignment(
 //     legate::AutoTask &task,
 //     const std::vector<legate::Variable> &inputs,
@@ -464,7 +465,7 @@ inline void add_transitive_alignment(
 //       auto [low, high] = bloat.value();
 //       std::cerr << "[RunPTXTask] BLOAT ALLIGNMENT low: " << low
 //                 << " :: high: " << high << std::endl;
-//       task.add_constraint(legate::bloat(outputs[0], inputs[0], low, high));
+//       task.add_constraint(legate::bloat(inputs[0], outputs[0], low, high));
 //     } else {
 //       // normal strict alignment
 //       task.add_constraint(legate::align(outputs[0], inputs[0]));
@@ -530,8 +531,9 @@ void new_task(std::string kernel_name, std::vector<uint32_t> &blocks,
   // Add alignment constraints
   add_transitive_alignment(task, input_vars, output_vars);
 
+  // bloat allignment
   // add_transitive_alignment(task, input_vars, output_vars,
-  //                          std::make_pair(legate::tuple<uint64_t>{0, 0},
+  //                          std::make_pair(legate::tuple<uint64_t>{1, 1},
   //                                         legate::tuple<uint64_t>{2, 2}));
 
   runtime->submit(std::move(task));
