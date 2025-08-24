@@ -233,6 +233,15 @@ void nda_binary_op(CN_NDArray* out, CuPyNumericBinaryOpCode op_code,
   out->obj.binary_op(op_code, rhs1->obj, rhs2->obj);
 }
 
+void nda_binary_reduction(CN_NDArray* out, CuPyNumericBinaryOpCode op_code,
+                   const CN_NDArray* rhs1, const CN_NDArray* rhs2) {
+  out->obj.binary_reduction(op_code, rhs1->obj, rhs2->obj);
+}
+
+CN_NDArray* nda_array_equal(const CN_NDArray* rhs1, const CN_NDArray* rhs2){
+  return new CN_NDArray{cupynumeric::array_equal(rhs1->obj, rhs2->obj)};
+}
+
 void nda_unary_op(CN_NDArray* out, CuPyNumericUnaryOpCode op_code,
                   CN_NDArray* input) {
   out->obj.unary_op(op_code, input->obj);
