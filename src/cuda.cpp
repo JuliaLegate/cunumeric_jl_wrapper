@@ -409,33 +409,12 @@ void dispatch_type(AccessMode mode, legate::Type::Code code, int dim, char *&p,
 }
 }  // namespace ufi
 
-// https://github.com/nv-legate/cupynumeric/blob/7e554b576ccc2d07a86986949cea79e56c690fe1/src/cupynumeric/ndarray.cc#L2120
-// Copied method from the above link.
-legate::LogicalStore broadcast(const std::vector<uint64_t> &shape,
-                               legate::LogicalStore &store) {
-  int32_t diff = static_cast<int32_t>(shape.size()) - store.dim();
-
-  auto result = store;
-  for (int32_t dim = 0; dim < diff; ++dim) {
-    result = result.promote(dim, shape[dim]);
-  }
-
-  std::vector<uint64_t> orig_shape = result.extents().data();
-  for (uint32_t dim = 0; dim < shape.size(); ++dim) {
-    if (orig_shape[dim] != shape[dim]) {
-      result = result.project(dim, 0).promote(dim, shape[dim]);
-    }
-  }
-
-  return result;
-}
-
 /* allignment contrainsts are transitive.
     we can allign all the inputs and then alligns all the outputs
     then allign one input with one output
     This reduces the need for a cartesian product.
 */
-inline void add_transitive_alignment(
+inline void add_default_alignment(
     legate::AutoTask &task, const std::vector<legate::Variable> &inputs,
     const std::vector<legate::Variable> &outputs) {
   for (size_t i = 1; i < inputs.size(); ++i)
@@ -447,31 +426,29 @@ inline void add_transitive_alignment(
 }
 
 // bloat allignment for stencils
-// inline void add_transitive_alignment(
-//     legate::AutoTask &task,
-//     const std::vector<legate::Variable> &inputs,
-//     const std::vector<legate::Variable> &outputs,
-//     std::optional<std::pair<legate::tuple<uint64_t>,
-//     legate::tuple<uint64_t>>> bloat = std::nullopt)
-// {
-//   for (size_t i = 1; i < inputs.size(); ++i)
-//     task.add_constraint(legate::align(inputs[i], inputs[0]));
-//   for (size_t i = 1; i < outputs.size(); ++i)
-//     task.add_constraint(legate::align(outputs[i], outputs[0]));
+inline void add_bloat_alignment(
+    legate::AutoTask &task, const std::vector<legate::Variable> &inputs,
+    const std::vector<legate::Variable> &outputs,
+    std::optional<std::pair<legate::tuple<uint64_t>, legate::tuple<uint64_t>>>
+        bloat = std::nullopt) {
+  for (size_t i = 1; i < inputs.size(); ++i)
+    task.add_constraint(legate::align(inputs[i], inputs[0]));
+  for (size_t i = 1; i < outputs.size(); ++i)
+    task.add_constraint(legate::align(outputs[i], outputs[0]));
 
-//   if (!inputs.empty() && !outputs.empty()) {
-//     if (bloat.has_value()) {
-//       // apply bloating alignment: outputs relative to inputs
-//       auto [low, high] = bloat.value();
-//       std::cerr << "[RunPTXTask] BLOAT ALLIGNMENT low: " << low
-//                 << " :: high: " << high << std::endl;
-//       task.add_constraint(legate::bloat(inputs[0], outputs[0], low, high));
-//     } else {
-//       // normal strict alignment
-//       task.add_constraint(legate::align(outputs[0], inputs[0]));
-//     }
-//   }
-// }
+  if (!inputs.empty() && !outputs.empty()) {
+    if (bloat.has_value()) {
+      // apply bloating alignment: outputs relative to inputs
+      auto [low, high] = bloat.value();
+      std::cerr << "[RunPTXTask] BLOAT ALLIGNMENT low: " << low
+                << " :: high: " << high << std::endl;
+      task.add_constraint(legate::bloat(inputs[0], outputs[0], low, high));
+    } else {
+      // normal strict alignment
+      task.add_constraint(legate::align(outputs[0], inputs[0]));
+    }
+  }
+}
 
 legate::Library get_lib() {
   auto runtime = cupynumeric::CuPyNumericRuntime::get_runtime();
@@ -515,7 +492,7 @@ void new_task(std::string kernel_name, std::vector<uint32_t> &blocks,
   for (const auto &in_ptr : inputs) {
     cupynumeric::NDArray &in = in_ptr->obj;
     auto store = in.get_store();
-    auto p = task.add_input(broadcast(out_shape, store));
+    auto p = task.add_input(store);
     input_vars.push_back(p);
   }
 
@@ -529,10 +506,9 @@ void new_task(std::string kernel_name, std::vector<uint32_t> &blocks,
 
   /* TODO actually support the constraint system */
   // Add alignment constraints
-  add_transitive_alignment(task, input_vars, output_vars);
+  add_default_alignment(task, input_vars, output_vars);
 
-  // bloat allignment
-  // add_transitive_alignment(task, input_vars, output_vars,
+  // add_bloat_alignment(task, input_vars, output_vars,
   //                          std::make_pair(legate::tuple<uint64_t>{1, 1},
   //                                         legate::tuple<uint64_t>{2, 2}));
 
@@ -563,7 +539,6 @@ void gpu_sync() {
 
 std::string extract_kernel_name(std::string ptx) {
   std::cmatch line_match;
-  // there should be a built in find name of ufi function - pat
   bool match = std::regex_search(ptx.c_str(), line_match,
                                  std::regex(".visible .entry [_a-zA-Z0-9$]+"));
 
@@ -586,4 +561,5 @@ void wrap_cuda_methods(jlcxx::Module &mod) {
   mod.method("ptx_task", &ptx_task);
   mod.method("gpu_sync", &gpu_sync);
   mod.method("extract_kernel_name", &extract_kernel_name);
+  mod.method("get_runtime", &legate::Runtime::get_runtime);
 }

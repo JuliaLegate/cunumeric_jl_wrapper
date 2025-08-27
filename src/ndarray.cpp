@@ -196,7 +196,11 @@ void nda_assign(CN_NDArray* arr, CN_NDArray* other) {
   arr->obj.assign(other->obj);
 }
 
-void nda_destroy_array(CN_NDArray* arr) { delete arr; }
+void nda_destroy_array(CN_NDArray* arr) {
+  if (arr != NULL) {
+    delete arr;
+  }
+}
 
 int32_t nda_array_dim(const CN_NDArray* arr) { return arr->obj.dim(); }
 
