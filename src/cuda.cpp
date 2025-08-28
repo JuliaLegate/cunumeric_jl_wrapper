@@ -28,10 +28,6 @@
 #include "legion.h"
 #include "ufi.h"
 
-struct CN_NDArray {
-  cupynumeric::NDArray obj;
-};
-
 // #define CUDA_DEBUG 1
 
 #define BLOCK_START 1
@@ -409,46 +405,31 @@ void dispatch_type(AccessMode mode, legate::Type::Code code, int dim, char *&p,
 }
 }  // namespace ufi
 
-/* allignment contrainsts are transitive.
-    we can allign all the inputs and then alligns all the outputs
-    then allign one input with one output
-    This reduces the need for a cartesian product.
-*/
-inline void add_default_alignment(
-    legate::AutoTask &task, const std::vector<legate::Variable> &inputs,
-    const std::vector<legate::Variable> &outputs) {
-  for (size_t i = 1; i < inputs.size(); ++i)
-    task.add_constraint(legate::align(inputs[i], inputs[0]));
-  for (size_t i = 1; i < outputs.size(); ++i)
-    task.add_constraint(legate::align(outputs[i], outputs[0]));
-  if (!inputs.empty() && !outputs.empty())
-    task.add_constraint(legate::align(outputs[0], inputs[0]));
-}
-
 // bloat allignment for stencils
-inline void add_bloat_alignment(
-    legate::AutoTask &task, const std::vector<legate::Variable> &inputs,
-    const std::vector<legate::Variable> &outputs,
-    std::optional<std::pair<legate::tuple<uint64_t>, legate::tuple<uint64_t>>>
-        bloat = std::nullopt) {
-  for (size_t i = 1; i < inputs.size(); ++i)
-    task.add_constraint(legate::align(inputs[i], inputs[0]));
-  for (size_t i = 1; i < outputs.size(); ++i)
-    task.add_constraint(legate::align(outputs[i], outputs[0]));
+// inline void add_bloat_alignment(
+//     legate::AutoTask &task, const std::vector<legate::Variable> &inputs,
+//     const std::vector<legate::Variable> &outputs,
+//     std::optional<std::pair<legate::tuple<uint64_t>,
+//     legate::tuple<uint64_t>>>
+//         bloat = std::nullopt) {
+//   for (size_t i = 1; i < inputs.size(); ++i)
+//     task.add_constraint(legate::align(inputs[i], inputs[0]));
+//   for (size_t i = 1; i < outputs.size(); ++i)
+//     task.add_constraint(legate::align(outputs[i], outputs[0]));
 
-  if (!inputs.empty() && !outputs.empty()) {
-    if (bloat.has_value()) {
-      // apply bloating alignment: outputs relative to inputs
-      auto [low, high] = bloat.value();
-      std::cerr << "[RunPTXTask] BLOAT ALLIGNMENT low: " << low
-                << " :: high: " << high << std::endl;
-      task.add_constraint(legate::bloat(inputs[0], outputs[0], low, high));
-    } else {
-      // normal strict alignment
-      task.add_constraint(legate::align(outputs[0], inputs[0]));
-    }
-  }
-}
+//   if (!inputs.empty() && !outputs.empty()) {
+//     if (bloat.has_value()) {
+//       // apply bloating alignment: outputs relative to inputs
+//       auto [low, high] = bloat.value();
+//       std::cerr << "[RunPTXTask] BLOAT ALLIGNMENT low: " << low
+//                 << " :: high: " << high << std::endl;
+//       task.add_constraint(legate::bloat(inputs[0], outputs[0], low, high));
+//     } else {
+//       // normal strict alignment
+//       task.add_constraint(legate::align(outputs[0], inputs[0]));
+//     }
+//   }
+// }
 
 legate::Library get_lib() {
   auto runtime = cupynumeric::CuPyNumericRuntime::get_runtime();
@@ -466,66 +447,6 @@ inline void add_xyz_scalars(legate::AutoTask &task,
   task.add_scalar_arg(legate::Scalar(xyz[2]));
 }
 
-void new_task(std::string kernel_name, std::vector<uint32_t> &blocks,
-              std::vector<uint32_t> &threads,
-              std::vector<std::shared_ptr<CN_NDArray>> &inputs,
-              std::vector<std::shared_ptr<CN_NDArray>> &outputs,
-              std::vector<legate::Scalar> &scalars) {
-  auto runtime = legate::Runtime::get_runtime();
-  auto library = get_lib();
-  auto task =
-      runtime->create_task(library, legate::LocalTaskID{ufi::RUN_PTX_TASK});
-
-  // Use first output shape as reference
-  const auto &out_shape = outputs.front()->obj.shape();
-
-  std::vector<legate::Variable> input_vars;
-  std::vector<legate::Variable> output_vars;
-
-  for (const auto &out_ptr : outputs) {
-    cupynumeric::NDArray &out = out_ptr->obj;
-    auto store = out.get_store();
-    auto p = task.add_output(store);
-    output_vars.push_back(p);
-  }
-
-  for (const auto &in_ptr : inputs) {
-    cupynumeric::NDArray &in = in_ptr->obj;
-    auto store = in.get_store();
-    auto p = task.add_input(store);
-    input_vars.push_back(p);
-  }
-
-  // Add kernel name and scalar args
-  task.add_scalar_arg(legate::Scalar(kernel_name));  // 0
-  add_xyz_scalars(task, blocks);                     // bx,by,bz 1,2,3
-  add_xyz_scalars(task, threads);                    // tx,ty,tz 4,5,6
-
-  for (const auto &scalar : scalars)
-    task.add_scalar_arg(scalar);  // 7+ -> ARG_OFFSET
-
-  /* TODO actually support the constraint system */
-  // Add alignment constraints
-  add_default_alignment(task, input_vars, output_vars);
-
-  // add_bloat_alignment(task, input_vars, output_vars,
-  //                          std::make_pair(legate::tuple<uint64_t>{1, 1},
-  //                                         legate::tuple<uint64_t>{2, 2}));
-
-  runtime->submit(std::move(task));
-}
-
-void ptx_task(std::string ptx, std::string kernel_name) {
-  auto runtime = legate::Runtime::get_runtime();
-  auto library = get_lib();
-  auto task =
-      runtime->create_task(library, legate::LocalTaskID{ufi::LOAD_PTX_TASK});
-  task.add_scalar_arg(legate::Scalar(ptx));
-  task.add_scalar_arg(legate::Scalar(kernel_name));
-
-  runtime->submit(std::move(task));
-}
-
 void register_tasks() {
   auto library = get_lib();
   ufi::LoadPTXTask::register_variants(library);
@@ -535,6 +456,14 @@ void register_tasks() {
 void gpu_sync() {
   cudaStream_t stream_ = nullptr;
   ERROR_CHECK(cudaDeviceSynchronize());
+}
+
+legate::LocalTaskID get_load_ptx_task_id() {
+  return legate::LocalTaskID{ufi::LOAD_PTX_TASK};
+}
+
+legate::LocalTaskID get_run_ptx_task_id() {
+  return legate::LocalTaskID{ufi::RUN_PTX_TASK};
 }
 
 std::string extract_kernel_name(std::string ptx) {
@@ -555,11 +484,12 @@ void register_kernel_state_size(uint64_t st_size) {
 
 void wrap_cuda_methods(jlcxx::Module &mod) {
   mod.method("register_tasks", &register_tasks);
+  mod.method("get_lib", &get_lib);
+  mod.method("get_load_ptx_task_id", &get_load_ptx_task_id);
+  mod.method("get_run_ptx_task_id", &get_run_ptx_task_id);
+  mod.method("add_xyz_scalars", &add_xyz_scalars);
   mod.method("register_kernel_state_size", &register_kernel_state_size);
   mod.method("get_library", &get_lib);
-  mod.method("new_task", &new_task);
-  mod.method("ptx_task", &ptx_task);
   mod.method("gpu_sync", &gpu_sync);
   mod.method("extract_kernel_name", &extract_kernel_name);
-  mod.method("get_runtime", &legate::Runtime::get_runtime);
 }

@@ -40,6 +40,11 @@ struct WrapCppOptional {
   }
 };
 
+legate::LogicalArray* get_store_wrap(CN_NDArray* arr) {
+  auto res = arr->obj.get_store();
+  return new legate::LogicalArray(std::move(res));
+}
+
 JLCXX_MODULE define_julia_module(jlcxx::Module& mod) {
   wrap_unary_ops(mod);
   wrap_binary_ops(mod);
@@ -65,6 +70,7 @@ JLCXX_MODULE define_julia_module(jlcxx::Module& mod) {
   mod.method("initialize_cunumeric", &cupynumeric::initialize);
 
   mod.add_type<CN_NDArray>("CN_NDArray");
+  mod.method("_get_store", &get_store_wrap);
 
   auto ndarray_accessor =
       mod.add_type<Parametric<TypeVar<1>, TypeVar<2>>>("NDArrayAccessor");

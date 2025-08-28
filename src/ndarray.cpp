@@ -77,6 +77,10 @@ struct CN_Type {
   legate::Type obj;
 };
 
+struct CN_Store {
+  legate::LogicalStore obj;
+};
+
 legate::Type code_to_type(legate::Type::Code code) {
   switch (code) {
     case legate::Type::Code::BOOL:
