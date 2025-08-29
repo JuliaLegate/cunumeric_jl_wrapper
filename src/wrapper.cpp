@@ -29,6 +29,7 @@
 #include "jlcxx/stl.hpp"
 #include "legate.h"
 #include "legion.h"
+#include "mathtypes/half.h"
 #include "types.h"
 #include "ufi.h"
 
@@ -51,16 +52,17 @@ JLCXX_MODULE define_julia_module(jlcxx::Module& mod) {
 
   // These are the types/dims used to generate templated functions
   // i.e. only these types/dims can be used from Julia side
-  using fp_types = ParameterList<double, float>;
+  using fp_types = ParameterList<__half, double, float>;
   using int_types = ParameterList<int8_t, int16_t, int32_t, int64_t>;
   using uint_types = ParameterList<uint8_t, uint16_t, uint32_t, uint64_t>;
 
   using all_types =
-      ParameterList<double, float, int8_t, int16_t, int32_t, int64_t, uint8_t,
-                    uint16_t, uint32_t, uint64_t>;
+      ParameterList<__half, double, float, int8_t, int16_t, int32_t, int64_t, uint8_t,
+                    uint16_t, uint32_t, uint64_t, bool>;
   using allowed_dims = ParameterList<std::integral_constant<int_t, 1>,
                                      std::integral_constant<int_t, 2>,
-                                     std::integral_constant<int_t, 3>>;
+                                     std::integral_constant<int_t, 3>,
+                                     std::integral_constant<int_t, 4>>;
 
   mod.method("initialize_cunumeric", &cupynumeric::initialize);
 
