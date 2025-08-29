@@ -22,7 +22,6 @@
 #include <cstdint>
 #include <regex>
 
-#include "cupynumeric.h"
 #include "legate.h"
 #include "legate/utilities/proc_local_storage.h"
 #include "legion.h"
@@ -74,7 +73,7 @@ std::size_t padded_bytes_kernel_state = 16;
 namespace ufi {
 using namespace Legion;
 // TODO CUcontext key hashing is redundant. ProcLocalStorage is local to the
-// cuContext. I didn't know that when designing this hashing method.
+// cuContext.
 using FunctionKey = std::pair<CUcontext, std::string>;
 
 struct FunctionKeyHash {
@@ -312,9 +311,6 @@ void dispatch_type(AccessMode mode, legate::Type::Code code, int dim, char *&p,
                                     nullptr, config));
 
   // DRIVER_ERROR_CHECK(cuStreamSynchronize(stream_));
-  // TEST_PRINT_DEBUG(a, N, float, "%f", stream_, "array a");
-  // TEST_PRINT_DEBUG(b, N, float, "%f", stream_, "array b");
-  // TEST_PRINT_DEBUG(c, N, float, "%f", stream_, "array c");
 }
 
 // https://github.com/nv-legate/legate.pandas/blob/branch-22.01/src/udf/load_ptx.cc
@@ -405,37 +401,6 @@ void dispatch_type(AccessMode mode, legate::Type::Code code, int dim, char *&p,
 }
 }  // namespace ufi
 
-// bloat allignment for stencils
-// inline void add_bloat_alignment(
-//     legate::AutoTask &task, const std::vector<legate::Variable> &inputs,
-//     const std::vector<legate::Variable> &outputs,
-//     std::optional<std::pair<legate::tuple<uint64_t>,
-//     legate::tuple<uint64_t>>>
-//         bloat = std::nullopt) {
-//   for (size_t i = 1; i < inputs.size(); ++i)
-//     task.add_constraint(legate::align(inputs[i], inputs[0]));
-//   for (size_t i = 1; i < outputs.size(); ++i)
-//     task.add_constraint(legate::align(outputs[i], outputs[0]));
-
-//   if (!inputs.empty() && !outputs.empty()) {
-//     if (bloat.has_value()) {
-//       // apply bloating alignment: outputs relative to inputs
-//       auto [low, high] = bloat.value();
-//       std::cerr << "[RunPTXTask] BLOAT ALLIGNMENT low: " << low
-//                 << " :: high: " << high << std::endl;
-//       task.add_constraint(legate::bloat(inputs[0], outputs[0], low, high));
-//     } else {
-//       // normal strict alignment
-//       task.add_constraint(legate::align(outputs[0], inputs[0]));
-//     }
-//   }
-// }
-
-legate::Library get_lib() {
-  auto runtime = cupynumeric::CuPyNumericRuntime::get_runtime();
-  return runtime->get_library();
-}
-
 inline void add_xyz_scalars(legate::AutoTask &task,
                             const std::vector<uint32_t> &v) {
   uint32_t xyz[3] = {1, 1, 1};
@@ -447,23 +412,9 @@ inline void add_xyz_scalars(legate::AutoTask &task,
   task.add_scalar_arg(legate::Scalar(xyz[2]));
 }
 
-void register_tasks() {
-  auto library = get_lib();
-  ufi::LoadPTXTask::register_variants(library);
-  ufi::RunPTXTask::register_variants(library);
-}
-
 void gpu_sync() {
   cudaStream_t stream_ = nullptr;
   ERROR_CHECK(cudaDeviceSynchronize());
-}
-
-legate::LocalTaskID get_load_ptx_task_id() {
-  return legate::LocalTaskID{ufi::LOAD_PTX_TASK};
-}
-
-legate::LocalTaskID get_run_ptx_task_id() {
-  return legate::LocalTaskID{ufi::RUN_PTX_TASK};
 }
 
 std::string extract_kernel_name(std::string ptx) {
@@ -483,13 +434,10 @@ void register_kernel_state_size(uint64_t st_size) {
 }
 
 void wrap_cuda_methods(jlcxx::Module &mod) {
-  mod.method("register_tasks", &register_tasks);
-  mod.method("get_lib", &get_lib);
-  mod.method("get_load_ptx_task_id", &get_load_ptx_task_id);
-  mod.method("get_run_ptx_task_id", &get_run_ptx_task_id);
   mod.method("add_xyz_scalars", &add_xyz_scalars);
   mod.method("register_kernel_state_size", &register_kernel_state_size);
-  mod.method("get_library", &get_lib);
   mod.method("gpu_sync", &gpu_sync);
   mod.method("extract_kernel_name", &extract_kernel_name);
+  mod.set_const("LOAD_PTX", legate::LocalTaskID{ufi::TaskIDs::LOAD_PTX_TASK});
+  mod.set_const("RUN_PTX", legate::LocalTaskID{ufi::TaskIDs::RUN_PTX_TASK});
 }

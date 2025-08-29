@@ -40,9 +40,20 @@ struct WrapCppOptional {
   }
 };
 
-legate::LogicalArray* get_store_wrap(CN_NDArray* arr) {
+legate::LogicalArray* get_store(CN_NDArray* arr) {
   auto res = arr->obj.get_store();
   return new legate::LogicalArray(std::move(res));
+}
+
+legate::Library get_lib() {
+  auto runtime = cupynumeric::CuPyNumericRuntime::get_runtime();
+  return runtime->get_library();
+}
+
+void register_tasks() {
+  auto library = get_lib();
+  ufi::LoadPTXTask::register_variants(library);
+  ufi::RunPTXTask::register_variants(library);
 }
 
 JLCXX_MODULE define_julia_module(jlcxx::Module& mod) {
@@ -70,7 +81,9 @@ JLCXX_MODULE define_julia_module(jlcxx::Module& mod) {
   mod.method("initialize_cunumeric", &cupynumeric::initialize);
 
   mod.add_type<CN_NDArray>("CN_NDArray");
-  mod.method("_get_store", &get_store_wrap);
+  mod.method("_get_store", &get_store);
+  mod.method("get_lib", &get_lib);
+  mod.method("register_tasks", &register_tasks);
 
   auto ndarray_accessor =
       mod.add_type<Parametric<TypeVar<1>, TypeVar<2>>>("NDArrayAccessor");
