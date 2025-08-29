@@ -19,23 +19,22 @@
 
 #include "cuda.h"
 
+#include <cstdint>
 #include <regex>
 
-#include "cupynumeric.h"
 #include "legate.h"
 #include "legate/utilities/proc_local_storage.h"
 #include "legion.h"
 #include "ufi.h"
-
-struct CN_NDArray {
-  cupynumeric::NDArray obj;
-};
 
 // #define CUDA_DEBUG 1
 
 #define BLOCK_START 1
 #define THREAD_START 4
 #define ARG_OFFSET 7
+
+// global padding for CUDA.jl kernel state
+std::size_t padded_bytes_kernel_state = 16;
 
 #define ERROR_CHECK(x)                                                 \
   {                                                                    \
@@ -74,7 +73,7 @@ struct CN_NDArray {
 namespace ufi {
 using namespace Legion;
 // TODO CUcontext key hashing is redundant. ProcLocalStorage is local to the
-// cuContext. I didn't know that when designing this hashing method.
+// cuContext.
 using FunctionKey = std::pair<CUcontext, std::string>;
 
 struct FunctionKeyHash {
@@ -108,16 +107,17 @@ std::string key_to_string(const FunctionKey &key) {
 }
 #endif
 
-struct CuDeviceArray {
-  void *ptr;
-  int64_t maxsize;
-  int64_t length;
-  int64_t reserved;
-};
-
 enum class AccessMode {
   READ,
   WRITE,
+};
+
+template <size_t D>
+struct CuDeviceArray {
+  void *ptr;                     // Pointer to device memory
+  uint64_t maxsize;              // Total allocated size in bytes
+  std::array<uint64_t, D> dims;  // Fixed-size array of dimension sizes
+  uint64_t length;               // Number of elements (at the end)
 };
 
 /* TODO::  check if std::enable_if is reducing the template expansion */
@@ -129,16 +129,23 @@ enum class AccessMode {
                                     const legate::PhysicalArray &rf) {         \
     auto shp = rf.shape<D>();                                                  \
     auto acc = rf.data().ACCESSOR_CALL<T, D>();                                \
+    std::cerr << "[RunPTXTask] " #MODE " accessor shape: " << shp.lo << " - "  \
+              << shp.hi << ", dim: " << D << std::endl;                        \
+    std::cerr << "[RunPTXTask] " #MODE " accessor strides: "                   \
+              << acc.accessor.strides << std::endl;                            \
     void *dev_ptr = const_cast<void *>(/*.lo to ensure multiple GPU support*/  \
                                        static_cast<const void *>(              \
                                            acc.ptr(Realm::Point<D>(shp.lo)))); \
-                                                                               \
-    CuDeviceArray desc = {                                                     \
-        dev_ptr, static_cast<int64_t>(shp.volume()) * (int64_t)sizeof(T),      \
-        static_cast<int64_t>(shp.volume()), 0};                                \
-                                                                               \
-    memcpy(p, &desc, sizeof(CuDeviceArray));                                   \
-    p += sizeof(CuDeviceArray);                                                \
+    auto extents = shp.hi - shp.lo + legate::Point<D>::ONES();                 \
+    CuDeviceArray<D> desc;                                                     \
+    desc.ptr = dev_ptr;                                                        \
+    desc.maxsize = shp.volume() * sizeof(T);                                   \
+    for (size_t i = 0; i < D; ++i) {                                           \
+      desc.dims[i] = extents[i];                                               \
+    }                                                                          \
+    desc.length = shp.volume();                                                \
+    memcpy(p, &desc, sizeof(CuDeviceArray<D>));                                \
+    p += sizeof(CuDeviceArray<D>);                                             \
   }
 
 CUDA_DEVICE_ARRAY_ARG(read, read_accessor);    // cuda_device_array_arg_read
@@ -243,27 +250,36 @@ void dispatch_type(AccessMode mode, legate::Type::Code code, int dim, char *&p,
   const std::size_t num_reductions =
       context.num_reductions();  // unused for now
 
-  const std::size_t padded_bytes = 16;
-
   // compute total size: all device arrays + all scalars
   // skip scalar 0-2 (kernel_name, threads, blocks)
-  std::size_t buffer_size =
-      padded_bytes + (num_inputs + num_outputs) * sizeof(CuDeviceArray);
+  // we allocate extra to decrease looping and dynamic dispatching on dim
+  std::size_t max_buffer_size =
+      padded_bytes_kernel_state +
+      (num_inputs + num_outputs) * sizeof(CuDeviceArray<REALM_MAX_DIM>);
   for (std::size_t i = ARG_OFFSET; i < num_scalars; ++i)
-    buffer_size += context.scalar(i).size();
+    max_buffer_size += context.scalar(i).size();
 
-  std::vector<char> arg_buffer(buffer_size);
-  char *p = arg_buffer.data() + padded_bytes;
+  std::vector<char> arg_buffer(max_buffer_size);
+  char *p = arg_buffer.data() + padded_bytes_kernel_state;
+
   for (std::size_t i = 0; i < num_inputs; ++i) {
     auto ps = context.input(i);
     auto code = ps.type().code();
     auto dim = ps.dim();
+#ifdef CUDA_DEBUG
+    std::cerr << "[RunPTXTask] Input " << i << " type: " << code
+              << ", dim: " << dim << std::endl;
+#endif
     dispatch_type(ufi::AccessMode::READ, code, dim, p, ps);
   }
   for (std::size_t i = 0; i < num_outputs; ++i) {
     auto ps = context.output(i);
     auto code = ps.type().code();
     auto dim = ps.dim();
+#ifdef CUDA_DEBUG
+    std::cerr << "[RunPTXTask] Output " << i << " type: " << code
+              << ", dim: " << dim << std::endl;
+#endif
     dispatch_type(ufi::AccessMode::WRITE, code, dim, p, ps);
   }
   for (std::size_t i = ARG_OFFSET; i < num_scalars; ++i) {
@@ -271,6 +287,8 @@ void dispatch_type(AccessMode mode, legate::Type::Code code, int dim, char *&p,
     memcpy(p, scalar.ptr(), scalar.size());
     p += scalar.size();
   }
+
+  std::size_t buffer_size = p - arg_buffer.data();  // calc used buffer
 
   void *config[] = {
       CU_LAUNCH_PARAM_BUFFER_POINTER,
@@ -282,13 +300,17 @@ void dispatch_type(AccessMode mode, legate::Type::Code code, int dim, char *&p,
 
   CUstream custream_ = reinterpret_cast<CUstream>(stream_);
 
-  DRIVER_ERROR_CHECK(cuLaunchKernel(func, tx, ty, tz, bx, by, bz, 0, custream_,
+#ifdef CUDA_DEBUG
+  std::cerr << "[RunPTXTask] Launching kernel " << kernel_name
+            << " with blocks (" << bx << "," << by << "," << bz
+            << ") and threads (" << tx << "," << ty << "," << tz << ")"
+            << " on CUcontext " << context_to_string(ctx) << std::endl;
+#endif
+  // Launch the kernel
+  DRIVER_ERROR_CHECK(cuLaunchKernel(func, bx, by, bz, tx, ty, tz, 0, custream_,
                                     nullptr, config));
 
   // DRIVER_ERROR_CHECK(cuStreamSynchronize(stream_));
-  // TEST_PRINT_DEBUG(a, N, float, "%f", stream_, "array a");
-  // TEST_PRINT_DEBUG(b, N, float, "%f", stream_, "array b");
-  // TEST_PRINT_DEBUG(c, N, float, "%f", stream_, "array c");
 }
 
 // https://github.com/nv-legate/legate.pandas/blob/branch-22.01/src/udf/load_ptx.cc
@@ -379,48 +401,6 @@ void dispatch_type(AccessMode mode, legate::Type::Code code, int dim, char *&p,
 }
 }  // namespace ufi
 
-// https://github.com/nv-legate/cupynumeric/blob/7e554b576ccc2d07a86986949cea79e56c690fe1/src/cupynumeric/ndarray.cc#L2120
-// Copied method from the above link.
-legate::LogicalStore broadcast(const std::vector<uint64_t> &shape,
-                               legate::LogicalStore &store) {
-  int32_t diff = static_cast<int32_t>(shape.size()) - store.dim();
-
-  auto result = store;
-  for (int32_t dim = 0; dim < diff; ++dim) {
-    result = result.promote(dim, shape[dim]);
-  }
-
-  std::vector<uint64_t> orig_shape = result.extents().data();
-  for (uint32_t dim = 0; dim < shape.size(); ++dim) {
-    if (orig_shape[dim] != shape[dim]) {
-      result = result.project(dim, 0).promote(dim, shape[dim]);
-    }
-  }
-
-  return result;
-}
-
-/* allignment contrainsts are transitive.
-    we can allign all the inputs and then alligns all the outputs
-    then allign one input with one output
-    This reduces the need for a cartesian product.
-*/
-inline void add_transitive_alignment(
-    legate::AutoTask &task, const std::vector<legate::Variable> &inputs,
-    const std::vector<legate::Variable> &outputs) {
-  for (size_t i = 1; i < inputs.size(); ++i)
-    task.add_constraint(legate::align(inputs[i], inputs[0]));
-  for (size_t i = 1; i < outputs.size(); ++i)
-    task.add_constraint(legate::align(outputs[i], outputs[0]));
-  if (!inputs.empty() && !outputs.empty())
-    task.add_constraint(legate::align(outputs[0], inputs[0]));
-}
-
-legate::Library get_lib() {
-  auto runtime = cupynumeric::CuPyNumericRuntime::get_runtime();
-  return runtime->get_library();
-}
-
 inline void add_xyz_scalars(legate::AutoTask &task,
                             const std::vector<uint32_t> &v) {
   uint32_t xyz[3] = {1, 1, 1};
@@ -432,68 +412,6 @@ inline void add_xyz_scalars(legate::AutoTask &task,
   task.add_scalar_arg(legate::Scalar(xyz[2]));
 }
 
-void new_task(std::string kernel_name, std::vector<uint32_t> &blocks,
-              std::vector<uint32_t> &threads,
-              std::vector<std::shared_ptr<CN_NDArray>> &inputs,
-              std::vector<std::shared_ptr<CN_NDArray>> &outputs,
-              std::vector<legate::Scalar> &scalars) {
-  auto runtime = legate::Runtime::get_runtime();
-  auto library = get_lib();
-  auto task =
-      runtime->create_task(library, legate::LocalTaskID{ufi::RUN_PTX_TASK});
-
-  // Use first output shape as reference
-  const auto &out_shape = outputs.front()->obj.shape();
-
-  std::vector<legate::Variable> input_vars;
-  std::vector<legate::Variable> output_vars;
-
-  for (const auto &out_ptr : outputs) {
-    cupynumeric::NDArray &out = out_ptr->obj;
-    auto store = out.get_store();
-    auto p = task.add_output(store);
-    output_vars.push_back(p);
-  }
-
-  for (const auto &in_ptr : inputs) {
-    cupynumeric::NDArray &in = in_ptr->obj;
-    auto store = in.get_store();
-    auto p = task.add_input(broadcast(out_shape, store));
-    input_vars.push_back(p);
-  }
-
-  // Add kernel name and scalar args
-  task.add_scalar_arg(legate::Scalar(kernel_name));  // 0
-  add_xyz_scalars(task, blocks);                     // bx,by,bz 1,2,3
-  add_xyz_scalars(task, threads);                    // tx,ty,tz 4,5,6
-
-  for (const auto &scalar : scalars)
-    task.add_scalar_arg(scalar);  // 7+ -> ARG_OFFSET
-
-  /* TODO actually support the constraint system */
-  // Add alignment constraints
-  add_transitive_alignment(task, input_vars, output_vars);
-
-  runtime->submit(std::move(task));
-}
-
-void ptx_task(std::string ptx, std::string kernel_name) {
-  auto runtime = legate::Runtime::get_runtime();
-  auto library = get_lib();
-  auto task =
-      runtime->create_task(library, legate::LocalTaskID{ufi::LOAD_PTX_TASK});
-  task.add_scalar_arg(legate::Scalar(ptx));
-  task.add_scalar_arg(legate::Scalar(kernel_name));
-
-  runtime->submit(std::move(task));
-}
-
-void register_tasks() {
-  auto library = get_lib();
-  ufi::LoadPTXTask::register_variants(library);
-  ufi::RunPTXTask::register_variants(library);
-}
-
 void gpu_sync() {
   cudaStream_t stream_ = nullptr;
   ERROR_CHECK(cudaDeviceSynchronize());
@@ -501,7 +419,6 @@ void gpu_sync() {
 
 std::string extract_kernel_name(std::string ptx) {
   std::cmatch line_match;
-  // there should be a built in find name of ufi function - pat
   bool match = std::regex_search(ptx.c_str(), line_match,
                                  std::regex(".visible .entry [_a-zA-Z0-9$]+"));
 
@@ -511,11 +428,16 @@ std::string extract_kernel_name(std::string ptx) {
   return fun_name;
 }
 
+void register_kernel_state_size(uint64_t st_size) {
+  // update global
+  padded_bytes_kernel_state = st_size;
+}
+
 void wrap_cuda_methods(jlcxx::Module &mod) {
-  mod.method("register_tasks", &register_tasks);
-  mod.method("get_library", &get_lib);
-  mod.method("new_task", &new_task);
-  mod.method("ptx_task", &ptx_task);
+  mod.method("add_xyz_scalars", &add_xyz_scalars);
+  mod.method("register_kernel_state_size", &register_kernel_state_size);
   mod.method("gpu_sync", &gpu_sync);
   mod.method("extract_kernel_name", &extract_kernel_name);
+  mod.set_const("LOAD_PTX", legate::LocalTaskID{ufi::TaskIDs::LOAD_PTX_TASK});
+  mod.set_const("RUN_PTX", legate::LocalTaskID{ufi::TaskIDs::RUN_PTX_TASK});
 }

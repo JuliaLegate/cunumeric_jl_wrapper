@@ -41,6 +41,22 @@ struct WrapCppOptional {
   }
 };
 
+legate::LogicalArray* get_store(CN_NDArray* arr) {
+  auto res = arr->obj.get_store();
+  return new legate::LogicalArray(std::move(res));
+}
+
+legate::Library get_lib() {
+  auto runtime = cupynumeric::CuPyNumericRuntime::get_runtime();
+  return runtime->get_library();
+}
+
+void register_tasks() {
+  auto library = get_lib();
+  ufi::LoadPTXTask::register_variants(library);
+  ufi::RunPTXTask::register_variants(library);
+}
+
 JLCXX_MODULE define_julia_module(jlcxx::Module& mod) {
   wrap_unary_ops(mod);
   wrap_binary_ops(mod);
@@ -57,16 +73,18 @@ JLCXX_MODULE define_julia_module(jlcxx::Module& mod) {
   using uint_types = ParameterList<uint8_t, uint16_t, uint32_t, uint64_t>;
 
   using all_types =
-      ParameterList<__half, double, float, int8_t, int16_t, int32_t, int64_t, uint8_t,
-                    uint16_t, uint32_t, uint64_t, bool>;
-  using allowed_dims = ParameterList<std::integral_constant<int_t, 1>,
-                                     std::integral_constant<int_t, 2>,
-                                     std::integral_constant<int_t, 3>,
-                                     std::integral_constant<int_t, 4>>;
+      ParameterList<__half, double, float, int8_t, int16_t, int32_t, int64_t,
+                    uint8_t, uint16_t, uint32_t, uint64_t, bool>;
+  using allowed_dims = ParameterList<
+      std::integral_constant<int_t, 1>, std::integral_constant<int_t, 2>,
+      std::integral_constant<int_t, 3>, std::integral_constant<int_t, 4>>;
 
   mod.method("initialize_cunumeric", &cupynumeric::initialize);
 
   mod.add_type<CN_NDArray>("CN_NDArray");
+  mod.method("_get_store", &get_store);
+  mod.method("get_lib", &get_lib);
+  mod.method("register_tasks", &register_tasks);
 
   auto ndarray_accessor =
       mod.add_type<Parametric<TypeVar<1>, TypeVar<2>>>("NDArrayAccessor");

@@ -78,6 +78,10 @@ struct CN_Type {
   legate::Type obj;
 };
 
+struct CN_Store {
+  legate::LogicalStore obj;
+};
+
 legate::Type code_to_type(legate::Type::Code code) {
   switch (code) {
     case legate::Type::Code::BOOL:
@@ -148,19 +152,19 @@ CN_NDArray* nda_reshape_array(CN_NDArray* arr, int32_t dim,
   return new CN_NDArray{NDArray(std::move(result))};
 }
 
-CN_NDArray* nda_from_scalar(CN_Type type, const void* value){
-    Scalar s(type.obj, value, true);
-    auto runtime = cupynumeric::CuPyNumericRuntime::get_runtime();
-    auto scalar_store  = runtime->create_scalar_store(s);
-    return new CN_NDArray{cupynumeric::as_array(scalar_store)};
-    // return new CN_NDArray{NDArray(std::move(scalar_store))};
-}
-
-
-CN_NDArray* nda_from_scalar_0D(CN_Type type, const void* value){
+CN_NDArray* nda_from_scalar(CN_Type type, const void* value) {
   Scalar s(type.obj, value, true);
-  return new CN_NDArray{legate::Runtime::get_runtime()->create_store(s, legate::Shape{})};
+  auto runtime = cupynumeric::CuPyNumericRuntime::get_runtime();
+  auto scalar_store = runtime->create_scalar_store(s);
+  return new CN_NDArray{cupynumeric::as_array(scalar_store)};
+  // return new CN_NDArray{NDArray(std::move(scalar_store))};
 }
+
+// CN_NDArray* nda_from_scalar_0D(CN_Type type, const void* value) {
+//   Scalar s(type.obj, value, true);
+//   return new CN_NDArray{
+//       legate::Runtime::get_runtime()->create_store(s, legate::Shape{})};
+// }
 
 CN_NDArray* nda_astype(CN_NDArray* arr, CN_Type type) {
   NDArray result = arr->obj.as_type(type.obj);
@@ -215,7 +219,11 @@ void nda_move(CN_NDArray* dst, CN_NDArray* src) {
   dst->obj.operator=(std::move(src->obj));
 }
 
-void nda_destroy_array(CN_NDArray* arr) { delete arr; }
+void nda_destroy_array(CN_NDArray* arr) {
+  if (arr != NULL) {
+    delete arr;
+  }
+}
 
 int32_t nda_array_dim(const CN_NDArray* arr) { return arr->obj.dim(); }
 
@@ -244,11 +252,11 @@ void nda_binary_op(CN_NDArray* out, CuPyNumericBinaryOpCode op_code,
 }
 
 void nda_binary_reduction(CN_NDArray* out, CuPyNumericBinaryOpCode op_code,
-                   const CN_NDArray* rhs1, const CN_NDArray* rhs2) {
+                          const CN_NDArray* rhs1, const CN_NDArray* rhs2) {
   out->obj.binary_reduction(op_code, rhs1->obj, rhs2->obj);
 }
 
-CN_NDArray* nda_array_equal(const CN_NDArray* rhs1, const CN_NDArray* rhs2){
+CN_NDArray* nda_array_equal(const CN_NDArray* rhs1, const CN_NDArray* rhs2) {
   return new CN_NDArray{cupynumeric::array_equal(rhs1->obj, rhs2->obj)};
 }
 
