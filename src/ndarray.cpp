@@ -156,6 +156,11 @@ CN_NDArray* nda_from_scalar(CN_Type type, const void* value){
     // return new CN_NDArray{NDArray(std::move(scalar_store))};
 }
 
+CN_NDArray* nda_from_scalar_0D(CN_Type type, const void* value){
+  Scalar s(type.obj, value, true);
+  return new CN_NDArray{legate::get_runtime()->create_store(s, Shape{})};
+}
+
 CN_NDArray* nda_astype(CN_NDArray* arr, CN_Type type) {
   NDArray result = arr->obj.as_type(type.obj);
   return new CN_NDArray{NDArray(std::move(result))};
@@ -203,6 +208,10 @@ CN_NDArray* nda_copy(CN_NDArray* arr) {
 
 void nda_assign(CN_NDArray* arr, CN_NDArray* other) {
   arr->obj.assign(other->obj);
+}
+
+void nda_move(CN_NDArray* dst, CN_NDArray* src) {
+  dst->obj.operator=(std::move(src->obj));
 }
 
 void nda_destroy_array(CN_NDArray* arr) { delete arr; }
