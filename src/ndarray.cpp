@@ -158,7 +158,7 @@ CN_NDArray* nda_from_scalar(CN_Type type, const void* value){
 
 CN_NDArray* nda_from_scalar_0D(CN_Type type, const void* value){
   Scalar s(type.obj, value, true);
-  return new CN_NDArray{legate::get_runtime()->create_store(s, Shape{})};
+  return new CN_NDArray{legate::get_runtime()->create_store(s, legate::Shape{})};
 }
 
 CN_NDArray* nda_astype(CN_NDArray* arr, CN_Type type) {
