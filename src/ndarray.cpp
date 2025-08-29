@@ -295,4 +295,14 @@ CN_NDArray* nda_get_slice(CN_NDArray* arr, const CN_Slice* slices,
   return new CN_NDArray{NDArray(std::move(result))};
 }
 
+CN_NDArray* nda_isapprox(CN_NDArray* rhs1, CN_NDArray* rhs2, float atol, float rtol){
+   CN_Type type(legate::bool_());
+   const auto shape = rhs.shape();
+   std::vector<uint64_t> out_shape(shape);
+   NDArray result = zeros(std::move(out_shape), type.obj);
+  # HOW TO PASS KWARGS???
+   result.binary_op(CuPyNumericBinaryOpCode::CUPYNUMERIC_BINOP_ISCLOSE, rhs1->obj, rhs2->obj);
+   return new CN_NDArray{std::move(result))};
+}
+
 }  // extern "C"
