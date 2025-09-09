@@ -76,8 +76,9 @@ JLCXX_MODULE define_julia_module(jlcxx::Module& mod) {
       ParameterList<double, float, int8_t, int16_t, int32_t, int64_t,
                     uint8_t, uint16_t, uint32_t, uint64_t, bool>;
   using allowed_dims = ParameterList<
-      std::integral_constant<int_t, 1>, std::integral_constant<int_t, 2>,
-      std::integral_constant<int_t, 3>, std::integral_constant<int_t, 4>>;
+      std::integral_constant<int_t, 0>, std::integral_constant<int_t, 1>, 
+      std::integral_constant<int_t, 2>, std::integral_constant<int_t, 3>, 
+      std::integral_constant<int_t, 4>>;
 
   mod.method("initialize_cunumeric", &cupynumeric::initialize);
 
