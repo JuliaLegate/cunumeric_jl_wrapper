@@ -313,7 +313,7 @@ CN_NDArray* nda_attach_external(const void* ptr, size_t size, int dim, const uin
   legate::ExternalAllocation alloc = legate::ExternalAllocation::create_sysmem(ptr, size);
   legate::mapping::DimOrdering ordering = legate::mapping::DimOrdering::c_order();
 
-  auto store = legate::Runtime::get_runtime()->create_store(shp, type, alloc, ordering);
+  auto store = legate::Runtime::get_runtime()->create_store(shp, type.obj, alloc, ordering);
   return new CN_NDArray{store};
 }
 }  // extern "C"
