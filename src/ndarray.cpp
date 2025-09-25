@@ -314,6 +314,6 @@ CN_NDArray* nda_attach_external(const void* ptr, size_t size, int dim, const uin
   legate::mapping::DimOrdering ordering = legate::mapping::DimOrdering::c_order();
 
   auto store = legate::Runtime::get_runtime()->create_store(shp, type.obj, alloc, ordering);
-  return new CN_NDArray{store};
+  return new CN_NDArray{cupynumeric::as_array(store)};
 }
 }  // extern "C"
