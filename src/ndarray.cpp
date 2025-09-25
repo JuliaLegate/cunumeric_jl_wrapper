@@ -1,5 +1,3 @@
-#include "cupynumeric/ndarray.h"
-
 #include <atomic>
 #include <cstdint>
 #include <cstdlib>
@@ -8,10 +6,14 @@
 #include <string_view>
 #include <vector>
 
-#include "cupynumeric.h"
-#include "cupynumeric/operators.h"
-#include "cupynumeric/runtime.h"
-#include "legate.h"
+#include <cupynumeric.h>
+#include <cupynumeric/operators.h>
+#include <cupynumeric/ndarray.h>
+#include <cupynumeric/runtime.h>
+
+#include <legate.h>
+#include <legate/mapping/mapping.h>
+
 #include "ndarray_c_api.h"
 
 constexpr uint64_t KiB = 1024ull;
@@ -304,8 +306,13 @@ CN_NDArray* nda_get_slice(CN_NDArray* arr, const CN_Slice* slices,
   return new CN_NDArray{NDArray(std::move(result))};
 }
 
-CN_NDArray* nda_attach_external(const void* ptr, size_t size) {
+CN_NDArray* nda_attach_external(const void* ptr, size_t size, int dim, const uint64_t* shape, CN_Type type) {
+  std::vector<uint64_t> shp(shape, shape + dim);
+  
   legate::ExternalAllocation alloc = legate::ExternalAllocation::create_sysmem(ptr, size);
-  return new CN_NDArray{legate::Runtime::get_runtime()->create_store(alloc)};
+  legate::mapping::DimOrdering ordering = legate::mapping::DimOrdering::c_order();
+
+  auto store = legate::Runtime::get_runtime()->create_store(shp, type, alloc, ordering);
+  return new CN_NDArray{store};
 }
 }  // extern "C"
