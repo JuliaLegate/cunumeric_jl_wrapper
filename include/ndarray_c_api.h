@@ -70,6 +70,7 @@ void nda_unary_reduction(CN_NDArray* out, CuPyNumericUnaryRedCode op_code,
                          CN_NDArray* input);
 CN_NDArray* nda_get_slice(CN_NDArray* arr, const CN_Slice* slices,
                           int32_t ndim);
+CN_NDArray* nda_attach_external(const void* ptr, size_t size);
 
 #ifdef __cplusplus
 }
