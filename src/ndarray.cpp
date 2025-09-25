@@ -1,5 +1,4 @@
 #include "cupynumeric/ndarray.h"
-#include <alloca.h>
 
 #include <atomic>
 #include <cstdint>
