@@ -1,4 +1,5 @@
 #include "cupynumeric/ndarray.h"
+#include <alloca.h>
 
 #include <atomic>
 #include <cstdint>
@@ -304,4 +305,8 @@ CN_NDArray* nda_get_slice(CN_NDArray* arr, const CN_Slice* slices,
   return new CN_NDArray{NDArray(std::move(result))};
 }
 
+CN_NDArray* nda_attach_external(const void* ptr, size_t size) {
+  legate::ExternalAllocation alloc = legate::ExternalAllocation::create_sysmem(ptr, size);
+  return new CN_NDArray{legate::Runtime::get_runtime()->create_store(alloc)};
+}
 }  // extern "C"
