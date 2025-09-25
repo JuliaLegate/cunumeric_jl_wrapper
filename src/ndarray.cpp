@@ -307,7 +307,8 @@ CN_NDArray* nda_get_slice(CN_NDArray* arr, const CN_Slice* slices,
 }
 
 CN_NDArray* nda_attach_external(const void* ptr, size_t size, int dim, const uint64_t* shape, CN_Type type) {
-  std::vector<uint64_t> shp(shape, shape + dim);
+  std::vector<uint64_t> shp_vec(shape, shape + dim);
+  legate::Shape shp = legate::Shape(shp);
   
   legate::ExternalAllocation alloc = legate::ExternalAllocation::create_sysmem(ptr, size);
   legate::mapping::DimOrdering ordering = legate::mapping::DimOrdering::c_order();
