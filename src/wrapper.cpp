@@ -29,6 +29,7 @@
 #include "jlcxx/stl.hpp"
 #include "legate.h"
 #include "legion.h"
+#include "realm.h"
 #include "mathtypes/half.h"
 #include "types.h"
 #include "ufi.h"
@@ -44,6 +45,22 @@ struct WrapCppOptional {
 legate::LogicalArray* get_store(CN_NDArray* arr) {
   auto res = arr->obj.get_store();
   return new legate::LogicalArray(std::move(res));
+}
+
+struct GetPtrFunctor {
+  template <legate::Type::Code CODE, int DIM>
+  void* operator()(legate::LogicalArray* arr) {
+    using CppT = typename legate_util::code_to_cxx<CODE>::type;
+    auto rf  = arr->get_physical_array();
+    auto shp = rf.shape<DIM>();
+    return rf.data().write_accessor<CppT, DIM>().ptr(Realm::Point<DIM>(shp.lo));
+  }
+};
+
+inline void* get_ptr(legate::LogicalArray* arr) {
+  int dim = arr->dim();
+  legate::Type::Code code = arr->type().code();
+  return legate::double_dispatch(dim, code, GetPtrFunctor{}, arr);
 }
 
 legate::Library get_lib() {
@@ -83,6 +100,7 @@ JLCXX_MODULE define_julia_module(jlcxx::Module& mod) {
 
   mod.add_type<CN_NDArray>("CN_NDArray");
   mod.method("_get_store", &get_store);
+  mod.method("_get_ptr", &get_ptr);
   mod.method("get_lib", &get_lib);
   mod.method("register_tasks", &register_tasks);
 

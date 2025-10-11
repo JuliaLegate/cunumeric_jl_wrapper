@@ -20,6 +20,31 @@
 #pragma once
 
 #include "jlcxx/jlcxx.hpp"
+#include "legate.h"
+
+namespace legate_util {
+template <legate::Type::Code CODE>
+struct code_to_cxx;
+
+#define DEFINE_CODE_TO_CXX(code_enum, cxx_type) \
+  template <> struct code_to_cxx<legate::Type::Code::code_enum> { using type = cxx_type; };
+
+DEFINE_CODE_TO_CXX(BOOL,       bool)
+DEFINE_CODE_TO_CXX(INT8,       int8_t)
+DEFINE_CODE_TO_CXX(INT16,      int16_t)
+DEFINE_CODE_TO_CXX(INT32,      int32_t)
+DEFINE_CODE_TO_CXX(INT64,      int64_t)
+DEFINE_CODE_TO_CXX(UINT8,      uint8_t)
+DEFINE_CODE_TO_CXX(UINT16,     uint16_t)
+DEFINE_CODE_TO_CXX(UINT32,     uint32_t)
+DEFINE_CODE_TO_CXX(UINT64,     uint64_t)
+DEFINE_CODE_TO_CXX(FLOAT16,    _Float16)
+DEFINE_CODE_TO_CXX(FLOAT32,    float)
+DEFINE_CODE_TO_CXX(FLOAT64,    double)
+DEFINE_CODE_TO_CXX(COMPLEX64,  std::complex<float>)
+DEFINE_CODE_TO_CXX(COMPLEX128, std::complex<double>)
+#undef DEFINE_CODE_TO_CXX
+} 
 
 // Unary op codes
 void wrap_unary_ops(jlcxx::Module&);

@@ -84,41 +84,6 @@ struct CN_Store {
   legate::LogicalStore obj;
 };
 
-legate::Type code_to_type(legate::Type::Code code) {
-  switch (code) {
-    case legate::Type::Code::BOOL:
-      return legate::bool_();
-    case legate::Type::Code::INT8:
-      return legate::int8();
-    case legate::Type::Code::INT16:
-      return legate::int16();
-    case legate::Type::Code::INT32:
-      return legate::int32();
-    case legate::Type::Code::INT64:
-      return legate::int64();
-    case legate::Type::Code::UINT8:
-      return legate::uint8();
-    case legate::Type::Code::UINT16:
-      return legate::uint16();
-    case legate::Type::Code::UINT32:
-      return legate::uint32();
-    case legate::Type::Code::UINT64:
-      return legate::uint64();
-    case legate::Type::Code::FLOAT16:
-      return legate::float16();
-    case legate::Type::Code::FLOAT32:
-      return legate::float32();
-    case legate::Type::Code::FLOAT64:
-      return legate::float64();
-    case legate::Type::Code::COMPLEX64:
-      return legate::complex64();
-    case legate::Type::Code::COMPLEX128:
-      return legate::complex128();
-    default:
-      throw std::runtime_error("Unknown type code");
-  }
-}
-
 uint64_t nda_query_device_memory() {
   uint64_t total = compute_total_fb_bytes_from_env();
   if (total == 0) total = 8ull * GiB;
@@ -308,10 +273,10 @@ CN_NDArray* nda_get_slice(CN_NDArray* arr, const CN_Slice* slices,
 
 CN_NDArray* nda_attach_external(const void* ptr, size_t size, int dim, const uint64_t* shape, CN_Type type) {
   std::vector<uint64_t> shp_vec(shape, shape + dim);
-  legate::Shape shp = legate::Shape(shp);
-  
+  legate::Shape shp = legate::Shape(shp_vec);
+
   legate::ExternalAllocation alloc = legate::ExternalAllocation::create_sysmem(ptr, size);
-  legate::mapping::DimOrdering ordering = legate::mapping::DimOrdering::c_order();
+  legate::mapping::DimOrdering ordering = legate::mapping::DimOrdering::fortran_order();
 
   auto store = legate::Runtime::get_runtime()->create_store(shp, type.obj, alloc, ordering);
   return new CN_NDArray{cupynumeric::as_array(store)};
