@@ -25,9 +25,11 @@
 #include "legate.h"
 #include "legate/utilities/proc_local_storage.h"
 #include "legion.h"
-#include "ufi.h"
 
-// #define CUDA_DEBUG 1
+#include "ufi.h"
+#include "types.h"
+
+#define CUDA_DEBUG 1
 
 #define BLOCK_START 1
 #define THREAD_START 4
@@ -69,6 +71,12 @@ std::size_t padded_bytes_kernel_state = 16;
     ERROR_CHECK(cudaStreamSynchronize(stream));                             \
     fprintf(stderr, "[TEST_PRINT] %s: " format "\n", message, host_arr[0]); \
   }
+
+#ifdef CUDA_DEBUG
+  #define CUDA_DEBUG_PRINT(x) do { x; } while (0)
+#else
+  #define CUDA_DEBUG_PRINT(x) do { } while (0)
+#endif
 
 namespace ufi {
 using namespace Legion;
@@ -120,7 +128,6 @@ struct CuDeviceArray {
   uint64_t length;               // Number of elements (at the end)
 };
 
-/* TODO::  check if std::enable_if is reducing the template expansion */
 #define CUDA_DEVICE_ARRAY_ARG(MODE, ACCESSOR_CALL)                             \
   template <                                                                   \
       typename T, int D,                                                       \
@@ -129,10 +136,12 @@ struct CuDeviceArray {
                                     const legate::PhysicalArray &rf) {         \
     auto shp = rf.shape<D>();                                                  \
     auto acc = rf.data().ACCESSOR_CALL<T, D>();                                \
-    std::cerr << "[RunPTXTask] " #MODE " accessor shape: " << shp.lo << " - "  \
-              << shp.hi << ", dim: " << D << std::endl;                        \
-    std::cerr << "[RunPTXTask] " #MODE " accessor strides: "                   \
-              << acc.accessor.strides << std::endl;                            \
+    CUDA_DEBUG_PRINT(                                                          \
+      std::cerr << "[RunPTXTask] " #MODE " accessor shape: " << shp.lo         \
+                << " - " << shp.hi << ", dim: " << D << std::endl;             \
+      std::cerr << "[RunPTXTask] " #MODE " accessor strides: "                 \
+                << acc.accessor.strides << std::endl;                          \
+    );                                                                         \
     void *dev_ptr = const_cast<void *>(/*.lo to ensure multiple GPU support*/  \
                                        static_cast<const void *>(              \
                                            acc.ptr(Realm::Point<D>(shp.lo)))); \
@@ -151,55 +160,17 @@ struct CuDeviceArray {
 CUDA_DEVICE_ARRAY_ARG(read, read_accessor);    // cuda_device_array_arg_read
 CUDA_DEVICE_ARRAY_ARG(write, write_accessor);  // cuda_device_array_arg_write
 
-/* TODO find a better way to do this.
-   Due to the templating for the accessor<T, DIM>, we cannot dispatch
-   dynamically without some sort of lookup. We are using a switch case
-   indirection. Probably can do some tricks with MACRO expansion
-*/
-template <typename T, int D>
-void dispatch_access(AccessMode mode, char *&p,
+struct ufiFunctor {
+  template <legate::Type::Code CODE, int DIM>
+  void operator()(AccessMode mode, char *&p,
                      const legate::PhysicalArray &arr) {
-  if (mode == AccessMode::READ)
-    cuda_device_array_arg_read<T, D>(p, arr);
-  else
-    cuda_device_array_arg_write<T, D>(p, arr);
-}
-template <typename T>
-void dispatch_dim(AccessMode mode, int dim, char *&p,
-                  const legate::PhysicalArray &arr) {
-  switch (dim) {
-    case 1:
-      dispatch_access<T, 1>(mode, p, arr);
-      break;
-    case 2:
-      dispatch_access<T, 2>(mode, p, arr);
-      break;
-    case 3:
-      dispatch_access<T, 3>(mode, p, arr);
-      break;
-    default:
-      throw std::runtime_error("Unsupported dimension");
+    using CppT = typename legate_util::code_to_cxx<CODE>::type;
+    if (mode == AccessMode::READ)
+      cuda_device_array_arg_read<CppT, DIM>(p, arr);
+    else
+      cuda_device_array_arg_write<CppT, DIM>(p, arr);
   }
-}
-void dispatch_type(AccessMode mode, legate::Type::Code code, int dim, char *&p,
-                   const legate::PhysicalArray &arr) {
-  switch (code) {
-    case legate::Type::Code::FLOAT32:
-      dispatch_dim<float>(mode, dim, p, arr);
-      break;
-    case legate::Type::Code::FLOAT64:
-      dispatch_dim<double>(mode, dim, p, arr);
-      break;
-    case legate::Type::Code::INT32:
-      dispatch_dim<int32_t>(mode, dim, p, arr);
-      break;
-    case legate::Type::Code::INT64:
-      dispatch_dim<int64_t>(mode, dim, p, arr);
-      break;
-    default:
-      throw std::runtime_error("Unsupported element type");
-  }
-}
+};
 
 // https://github.com/nv-legate/legate.pandas/blob/branch-22.01/src/udf/eval_udf_gpu.cc
 /*static*/ void RunPTXTask::gpu_variant(legate::TaskContext context) {
@@ -270,7 +241,8 @@ void dispatch_type(AccessMode mode, legate::Type::Code code, int dim, char *&p,
     std::cerr << "[RunPTXTask] Input " << i << " type: " << code
               << ", dim: " << dim << std::endl;
 #endif
-    dispatch_type(ufi::AccessMode::READ, code, dim, p, ps);
+    // dispatch on dim and code with ufiFunctor operator()
+    legate::double_dispatch(dim, code, ufiFunctor{}, ufi::AccessMode::READ, p, ps);
   }
   for (std::size_t i = 0; i < num_outputs; ++i) {
     auto ps = context.output(i);
@@ -280,7 +252,7 @@ void dispatch_type(AccessMode mode, legate::Type::Code code, int dim, char *&p,
     std::cerr << "[RunPTXTask] Output " << i << " type: " << code
               << ", dim: " << dim << std::endl;
 #endif
-    dispatch_type(ufi::AccessMode::WRITE, code, dim, p, ps);
+    legate::double_dispatch(dim, code, ufiFunctor{}, ufi::AccessMode::WRITE, p, ps);
   }
   for (std::size_t i = ARG_OFFSET; i < num_scalars; ++i) {
     const auto &scalar = context.scalar(i);
