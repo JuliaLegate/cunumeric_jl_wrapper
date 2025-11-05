@@ -35,6 +35,7 @@ set(SOURCES
 if(NOT NOCUDA)
     find_package(CUDAToolkit 12.2 REQUIRED)
     list(APPEND SOURCES src/cuda.cpp)
+    add_compile_definitions(HAVE_CUDA)
     set(HAVE_CUDA TRUE)
     message(STATUS "CUDA enabled: adding src/cuda.cpp")
 else()
