@@ -50,6 +50,12 @@ legate::LogicalArray* get_store(CN_NDArray* arr) {
 struct GetPtrFunctor {
   template <legate::Type::Code CODE, int DIM>
   void* operator()(legate::LogicalArray* arr) {
+#ifndef HAVE_CUDA
+    // Check if FLOAT16 is being used without CUDA support
+    if (CODE == legate::Type::Code::FLOAT16) {
+      throw std::runtime_error("FLOAT16 type is not supported when building without CUDA");
+    }
+#endif
     using CppT = typename legate_util::code_to_cxx<CODE>::type;
     auto rf  = arr->get_physical_array();
     auto shp = rf.shape<DIM>();

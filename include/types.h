@@ -40,6 +40,11 @@ DEFINE_CODE_TO_CXX(UINT32,     uint32_t)
 DEFINE_CODE_TO_CXX(UINT64,     uint64_t)
 #ifdef HAVE_CUDA
   DEFINE_CODE_TO_CXX(FLOAT16,    __half)
+#else
+  // Dummy type for FLOAT16 when CUDA is not available
+  // This allows compilation but we throw an error if actually used
+  struct __half_dummy {};
+  DEFINE_CODE_TO_CXX(FLOAT16,    __half_dummy)
 #endif
 DEFINE_CODE_TO_CXX(FLOAT32,    float)
 DEFINE_CODE_TO_CXX(FLOAT64,    double)
