@@ -122,5 +122,7 @@ JLCXX_MODULE define_julia_module(jlcxx::Module& mod) {
         v.push_back(std::make_shared<CN_NDArray>(x));
       });
 
+  #ifdef HAVE_CUDA
   wrap_cuda_methods(mod);
+  #endif
 }
